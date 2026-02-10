@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: opp_db
+      POSTGRES_USER: opp_user
+      POSTGRES_PASSWORD: opp_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opp_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (Celery broker)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./opp-backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://opp_user:opp_pass@db:5432/opp_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: your-secret-key
+      CORS_ORIGINS: http://localhost:5173
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./opp-backend:/app
+      - ./opp-backend/media:/app/media  # Adjuntos
+
+  # Celery Worker
+  celery:
+    build:
+      context: ./opp-backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://opp_user:opp_pass@db:5432/opp_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./opp-backend:/app
+
+  # Frontend
+  frontend:
+    build:
+      context: ./opp-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
